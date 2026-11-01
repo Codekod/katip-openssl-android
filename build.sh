@@ -112,18 +112,20 @@ for abi in $ABIS; do
   llvm-strip --strip-debug "$MODULE/libs/android.$abi/libcrypto.a"
   printf '{"abi":"%s","api":%s,"ndk":%s,"stl":"none","static":true}\n' \
     "$abi" "$ANDROID_API" "${NDK_VERSION%%.*}" >"$MODULE/libs/android.$abi/abi.json"
-  # One include directory serves every ABI: the generated headers must agree.
-  if [[ -d "$MODULE/include" ]]; then
-    diff -r "$MODULE/include/openssl" "$src/include/openssl" >/dev/null || {
-      echo "headers differ between ABIs ($abi)" >&2
-      exit 1
-    }
-  else
-    mkdir -p "$MODULE/include"
-    cp -R "$src/include/openssl" "$MODULE/include/openssl"
-  fi
+  # Headers per ABI: OpenSSL generates some of them from the target (configuration.h follows
+  # bn_ops, e.g. RC4_INT), so ABIs need not agree. Prefab uses libs/<abi>/include when present.
+  mkdir -p "$MODULE/libs/android.$abi/include"
+  cp -R "$src/include/openssl" "$MODULE/libs/android.$abi/include/openssl"
   # OpenSSL's license travels inside the AAR.
   if [[ ! -f "$AAR/LICENSE.txt" ]]; then cp "$src/LICENSE.txt" "$AAR/LICENSE.txt"; fi
+done
+
+# For the record: which generated headers differ between the ABIs.
+first_abi="${ABIS%% *}"
+for abi in $ABIS; do
+  [[ "$abi" == "$first_abi" ]] && continue
+  echo "== headers that differ: $first_abi / $abi"
+  diff -rq "$MODULE/libs/android.$first_abi/include" "$MODULE/libs/android.$abi/include" || true
 done
 
 printf '{"schema_version":2,"name":"openssl","version":"%s","dependencies":[]}\n' \

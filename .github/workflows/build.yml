@@ -1,6 +1,9 @@
+# OpenSSL libcrypto for Android: build, compare, and (by hand) publish.
 # Builds the AAR twice and fails unless both are byte for byte the same. Publishing is a
 # separate job: run by hand on main with "publish" checked; it attests the build provenance and
-# publishes an immutable release. Every action is pinned to a commit.
+# publishes an immutable release. Every action is pinned to a commit. Allowed actions needed:
+# actions/checkout, actions/upload-artifact, actions/download-artifact,
+# actions/attest-build-provenance and actions/attest (which attest-build-provenance calls).
 name: build
 
 on:

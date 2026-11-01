@@ -1,0 +1,90 @@
+# Builds the AAR twice and fails unless both are byte for byte the same. Publishing is a
+# separate job: run by hand on main with "publish" checked; it attests the build provenance and
+# publishes an immutable release. Every action is pinned to a commit.
+name: build
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish openssl-<version> as a release, with provenance attestations
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned NDK
+        run: |
+          source openssl.env
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >>"$GITHUB_ENV"
+
+      - name: Build
+        run: ./build.sh out/first
+
+      - name: Build again and compare
+        run: |
+          ./build.sh out/second
+          cmp out/first/SHA256SUMS out/second/SHA256SUMS
+          cmp out/first/*.aar out/second/*.aar
+          cat out/first/SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openssl-android
+          path: out/first
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: openssl-android
+          path: out
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            out/*.aar
+            out/*.pom
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source openssl.env
+          tag="openssl-$OPENSSL_VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released; releases are immutable" >&2
+            exit 1
+          fi
+          # Immutable releases take assets only while a draft: upload, then publish.
+          gh release create "$tag" --draft --title "OpenSSL $OPENSSL_VERSION for Android" \
+            --notes "libcrypto $OPENSSL_VERSION (static, prefab) for $ABIS, Android API $ANDROID_API, NDK $NDK_VERSION. SHA-256 below and in SHA256SUMS; verify with gh attestation verify (README)." \
+            out/*.aar out/*.pom out/SHA256SUMS
+          gh release edit "$tag" --draft=false
